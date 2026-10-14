@@ -59,6 +59,9 @@ const GAME_OVER_PANEL_COLOR = 0x0f172a;
 // Шрифт для всех надписей.
 const FONT_FAMILY = 'system-ui, sans-serif';
 
+// Слой надписи «Пауза»: выше машин, чтобы они её не закрывали.
+const PAUSE_TEXT_DEPTH = 10;
+
 // Дорога, по которой едет машина.
 type Road = 'horizontal' | 'vertical';
 
@@ -86,6 +89,8 @@ export class GameScene extends Phaser.Scene {
   private score = 0;
   // true, когда игра окончена и ждёт перезапуска.
   private isGameOver = false;
+  // true, когда игра на паузе (клавиша P).
+  private isPaused = false;
 
   // Машины на каждой дороге. Порядок в массиве = порядок на дороге:
   // [0] — машина, которая едет первой (ближе всех к концу дороги).
@@ -103,6 +108,8 @@ export class GameScene extends Phaser.Scene {
 
   private scoreText!: Phaser.GameObjects.Text;
   private flowText!: Phaser.GameObjects.Text;
+  // Надпись «Пауза», видна только во время паузы.
+  private pauseText!: Phaser.GameObjects.Text;
   // Кружок-сигнал для машин горизонтальной дороги.
   private horizontalLight!: Phaser.GameObjects.Arc;
   // Кружок-сигнал для машин вертикальной дороги.
@@ -118,6 +125,7 @@ export class GameScene extends Phaser.Scene {
     this.isHorizontalGreen = true;
     this.score = 0;
     this.isGameOver = false;
+    this.isPaused = false;
     this.horizontalCars = [];
     this.verticalCars = [];
     this.spawnInterval = START_SPAWN_INTERVAL;
@@ -129,6 +137,7 @@ export class GameScene extends Phaser.Scene {
     this.drawStopLines();
     this.createLights();
     this.createHud();
+    this.createPauseText();
     this.setupInput();
 
     this.updateLights();
@@ -136,8 +145,10 @@ export class GameScene extends Phaser.Scene {
 
   // Вызывается Phaser каждый кадр. delta — сколько мс прошло с прошлого кадра.
   update(_time: number, delta: number): void {
-    // После Game Over ничего не двигаем: картинка «замирает».
-    if (this.isGameOver) return;
+    // После Game Over и во время паузы ничего не двигаем: картинка «замирает».
+    // Все таймеры, движение и очки считаются только здесь, поэтому
+    // этот выход останавливает их все сразу.
+    if (this.isGameOver || this.isPaused) return;
 
     const seconds = delta / 1000;
 
@@ -228,11 +239,27 @@ export class GameScene extends Phaser.Scene {
       color: '#ffffff',
     });
 
-    this.add.text(24, 82, 'Клик / Пробел — переключить светофор', {
+    this.add.text(24, 82, 'Клик / Пробел — переключить светофор, P — пауза', {
       fontFamily: FONT_FAMILY,
       fontSize: '16px',
       color: '#cbd5e1',
     });
+  }
+
+  // Создаёт надпись «Пауза» по центру экрана. Сначала она скрыта.
+  private createPauseText(): void {
+    this.pauseText = this.add
+      .text(this.scale.width / 2, this.scale.height / 2, 'Пауза\nP — продолжить', {
+        fontFamily: FONT_FAMILY,
+        fontSize: '32px',
+        color: '#ffffff',
+        align: 'center',
+        backgroundColor: '#0f172a',
+        padding: { x: 32, y: 20 },
+      })
+      .setOrigin(0.5)
+      .setDepth(PAUSE_TEXT_DEPTH)
+      .setVisible(false);
   }
 
   // ===== Управление и светофор =====
@@ -246,11 +273,26 @@ export class GameScene extends Phaser.Scene {
 
     this.input.on('pointerdown', () => this.handleAction());
     this.input.keyboard.on('keydown-SPACE', () => this.handleAction());
+    // P — пауза и продолжение. Phaser смотрит на физическую клавишу,
+    // поэтому P работает и на русской раскладке.
+    this.input.keyboard.on('keydown-P', () => this.togglePause());
+  }
+
+  // Клавиша P: ставит игру на паузу или снимает с паузы.
+  private togglePause(): void {
+    // На экране Game Over пауза не нужна.
+    if (this.isGameOver) return;
+
+    this.isPaused = !this.isPaused;
+    this.pauseText.setVisible(this.isPaused);
   }
 
   // Клик или пробел: во время игры переключает светофор,
   // после Game Over начинает новую игру.
   private handleAction(): void {
+    // Во время паузы клик и пробел ничего не делают.
+    if (this.isPaused) return;
+
     if (this.isGameOver) {
       this.scene.restart();
     } else {
