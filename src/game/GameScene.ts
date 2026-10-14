@@ -1,4 +1,16 @@
 import Phaser from 'phaser';
+// Параметры сложности (фаза 1, фаза 2, поток машин) — в settings.ts.
+import {
+  CAR_SPEED,
+  PHASE_1_HORIZONTAL_CHANCE,
+  PHASE_2_START_SCORE,
+  PHASE_2_CAR_SPEED,
+  PHASE_2_HORIZONTAL_CHANCE,
+  START_SPAWN_INTERVAL,
+  MIN_SPAWN_INTERVAL,
+  SPAWN_INTERVAL_STEP,
+  DIFFICULTY_STEP_TIME,
+} from './settings';
 
 // ===== Параметры перекрёстка =====
 
@@ -24,23 +36,10 @@ const LIGHT_BEFORE_STOP_LINE = 40;
 const CAR_LENGTH = 40;
 // Ширина машины поперёк дороги.
 const CAR_WIDTH = 24;
-// Скорость машины в пикселях в секунду.
-const CAR_SPEED = 140;
 // Зазор между машинами в очереди.
 const CAR_GAP = 12;
 // Цвета, из которых случайно выбирается цвет новой машины.
 const CAR_COLORS = [0x38bdf8, 0xfacc15, 0xf472b6, 0xa78bfa, 0xfb923c, 0xe2e8f0];
-
-// ===== Параметры сложности =====
-
-// Интервал появления машин в начале игры (мс).
-const START_SPAWN_INTERVAL = 2000;
-// Минимальный интервал появления машин: чаще машины не появляются (мс).
-const MIN_SPAWN_INTERVAL = 600;
-// На сколько уменьшается интервал при каждом усложнении (мс).
-const SPAWN_INTERVAL_STEP = 200;
-// Как часто игра усложняется (мс).
-const DIFFICULTY_STEP_TIME = 15000;
 
 // ===== Цвета =====
 
@@ -62,15 +61,8 @@ const FONT_FAMILY = 'system-ui, sans-serif';
 // Слой надписи «Пауза»: выше машин, чтобы они её не закрывали.
 const PAUSE_TEXT_DEPTH = 10;
 
-// ===== Фаза 2 «Час пик» =====
+// ===== Фаза 2 «Час пик»: оформление =====
 
-// Сколько очков нужно набрать, чтобы началась фаза 2.
-const PHASE_2_START_SCORE = 10;
-// Скорость машин в фазе 2 (в фазе 1 — CAR_SPEED).
-const PHASE_2_CAR_SPEED = 190;
-// Доля машин, которые появляются на горизонтальной дороге.
-const PHASE_1_HORIZONTAL_CHANCE = 0.5;
-const PHASE_2_HORIZONTAL_CHANCE = 0.7;
 // Сколько мс виден баннер «ЧАС ПИК!».
 const PHASE_BANNER_TIME = 3000;
 // Цвет дорог в фазе 2: постоянный знак, что идёт час пик.
