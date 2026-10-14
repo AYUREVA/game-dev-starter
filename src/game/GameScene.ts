@@ -64,8 +64,8 @@ const PAUSE_TEXT_DEPTH = 10;
 
 // ===== Фаза 2 «Час пик» =====
 
-// Через сколько мс игрового времени начинается фаза 2.
-const PHASE_2_START_TIME = 15000;
+// Сколько очков нужно набрать, чтобы началась фаза 2.
+const PHASE_2_START_SCORE = 10;
 // Скорость машин в фазе 2 (в фазе 1 — CAR_SPEED).
 const PHASE_2_CAR_SPEED = 190;
 // Доля машин, которые появляются на горизонтальной дороге.
@@ -124,8 +124,6 @@ export class GameScene extends Phaser.Scene {
 
   // Текущая фаза игры: 1 — обычная, 2 — «Час пик».
   private phase = 1;
-  // Сколько мс игрового времени прошло (на паузе не растёт).
-  private gameTime = 0;
   // Текущая скорость машин (меняется в фазе 2).
   private carSpeed = CAR_SPEED;
   // Текущая доля машин на горизонтальной дороге (меняется в фазе 2).
@@ -167,7 +165,6 @@ export class GameScene extends Phaser.Scene {
     this.flowLevel = 1;
     // Новая игра всегда начинается с фазы 1.
     this.phase = 1;
-    this.gameTime = 0;
     this.carSpeed = CAR_SPEED;
     this.horizontalChance = PHASE_1_HORIZONTAL_CHANCE;
     this.bannerTimeLeft = 0;
@@ -414,12 +411,11 @@ export class GameScene extends Phaser.Scene {
 
   // ===== Фазы =====
 
-  // Считает игровое время, включает фазу 2 и прячет баннер, когда его время вышло.
-  // Вызывается только из update(), поэтому на паузе время не идёт.
+  // Включает фазу 2, когда набрано нужное число очков,
+  // и прячет баннер, когда его время вышло.
+  // Вызывается только из update(), поэтому на паузе таймер баннера не идёт.
   private updatePhase(delta: number): void {
-    this.gameTime += delta;
-
-    if (this.phase === 1 && this.gameTime >= PHASE_2_START_TIME) {
+    if (this.phase === 1 && this.score >= PHASE_2_START_SCORE) {
       this.startPhase2();
     }
 
