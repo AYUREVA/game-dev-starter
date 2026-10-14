@@ -1,108 +1,469 @@
 import Phaser from 'phaser';
 
-const PLAYER_SPEED = 260;
+// ===== Параметры перекрёстка =====
+
+// Ширина каждой дороги в пикселях.
+const ROAD_WIDTH = 64;
+// Насколько стоп-линия отстоит от края перекрёстка.
+const STOP_LINE_GAP = 8;
+// Толщина белой стоп-линии.
+const STOP_LINE_THICKNESS = 4;
+
+// ===== Параметры светофора =====
+
+// Радиус кружка-сигнала.
+const LIGHT_RADIUS = 12;
+// Насколько сигнал отстоит от края дороги (чтобы не стоял на проезжей части).
+const LIGHT_OFFSET = 24;
+// Насколько сигнал стоит раньше стоп-линии (против движения машин).
+const LIGHT_BEFORE_STOP_LINE = 40;
+
+// ===== Параметры машин =====
+
+// Длина машины вдоль дороги.
+const CAR_LENGTH = 40;
+// Ширина машины поперёк дороги.
+const CAR_WIDTH = 24;
+// Скорость машины в пикселях в секунду.
+const CAR_SPEED = 140;
+// Зазор между машинами в очереди.
+const CAR_GAP = 12;
+// Цвета, из которых случайно выбирается цвет новой машины.
+const CAR_COLORS = [0x38bdf8, 0xfacc15, 0xf472b6, 0xa78bfa, 0xfb923c, 0xe2e8f0];
+
+// ===== Параметры сложности =====
+
+// Интервал появления машин в начале игры (мс).
+const START_SPAWN_INTERVAL = 2000;
+// Минимальный интервал появления машин: чаще машины не появляются (мс).
+const MIN_SPAWN_INTERVAL = 600;
+// На сколько уменьшается интервал при каждом усложнении (мс).
+const SPAWN_INTERVAL_STEP = 200;
+// Как часто игра усложняется (мс).
+const DIFFICULTY_STEP_TIME = 15000;
+
+// ===== Цвета =====
+
+const ROAD_COLOR = 0x334155;
+const STOP_LINE_COLOR = 0xffffff;
+const GREEN_COLOR = 0x22c55e;
+const RED_COLOR = 0xef4444;
+// Затемнение экрана при Game Over: цвет и прозрачность.
+const GAME_OVER_SHADE_COLOR = 0x000000;
+const GAME_OVER_SHADE_ALPHA = 0.65;
+// Плашка под надписями Game Over: размер и цвет.
+const GAME_OVER_PANEL_WIDTH = 440;
+const GAME_OVER_PANEL_HEIGHT = 220;
+const GAME_OVER_PANEL_COLOR = 0x0f172a;
+
+// Шрифт для всех надписей.
+const FONT_FAMILY = 'system-ui, sans-serif';
+
+// Дорога, по которой едет машина.
+type Road = 'horizontal' | 'vertical';
+
+// Машина: прямоугольник на экране и дорога, по которой он едет.
+interface Car {
+  body: Phaser.GameObjects.Rectangle;
+  road: Road;
+}
 
 /**
- * Минимальная рабочая сцена курса.
+ * Игра «Светофор».
  *
- * Здесь намеренно почти нет "игры": квадрат двигается, круг можно собирать,
- * растёт счёт. Задача студента — превратить этот каркас в собственную игру.
+ * Две дороги пересекаются в центре экрана. Игрок кликом или пробелом
+ * переключает светофор: когда горизонтальной дороге горит зелёный,
+ * вертикальной горит красный, и наоборот.
+ *
+ * За каждую уехавшую за край машину — очко. Игра заканчивается, если
+ * машины с разных дорог столкнулись («Авария!») или очередь дошла
+ * до края экрана («Пробка!»).
  */
 export class GameScene extends Phaser.Scene {
-  private player!: Phaser.GameObjects.Rectangle;
-  private target!: Phaser.GameObjects.Arc;
-  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private wasd!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
-  private scoreText!: Phaser.GameObjects.Text;
+  // true — едет горизонтальная дорога, false — вертикальная.
+  private isHorizontalGreen = true;
+  // Сколько машин проехало перекрёсток.
   private score = 0;
+  // true, когда игра окончена и ждёт перезапуска.
+  private isGameOver = false;
+
+  // Машины на каждой дороге. Порядок в массиве = порядок на дороге:
+  // [0] — машина, которая едет первой (ближе всех к концу дороги).
+  private horizontalCars: Car[] = [];
+  private verticalCars: Car[] = [];
+
+  // Текущий интервал между появлениями машин (мс).
+  private spawnInterval = START_SPAWN_INTERVAL;
+  // Сколько времени прошло с появления последней машины (мс).
+  private timeSinceSpawn = 0;
+  // Сколько времени прошло с последнего усложнения (мс).
+  private timeSinceDifficultyUp = 0;
+  // Номер ступени сложности, показывается в HUD.
+  private flowLevel = 1;
+
+  private scoreText!: Phaser.GameObjects.Text;
+  private flowText!: Phaser.GameObjects.Text;
+  // Кружок-сигнал для машин горизонтальной дороги.
+  private horizontalLight!: Phaser.GameObjects.Arc;
+  // Кружок-сигнал для машин вертикальной дороги.
+  private verticalLight!: Phaser.GameObjects.Arc;
 
   constructor() {
     super('GameScene');
   }
 
   create(): void {
+    // При перезапуске сцены create() вызывается снова, а поля класса
+    // сохраняют старые значения, поэтому сбрасываем их здесь.
+    this.isHorizontalGreen = true;
+    this.score = 0;
+    this.isGameOver = false;
+    this.horizontalCars = [];
+    this.verticalCars = [];
+    this.spawnInterval = START_SPAWN_INTERVAL;
+    this.timeSinceSpawn = 0;
+    this.timeSinceDifficultyUp = 0;
+    this.flowLevel = 1;
+
+    this.drawRoads();
+    this.drawStopLines();
+    this.createLights();
+    this.createHud();
+    this.setupInput();
+
+    this.updateLights();
+  }
+
+  // Вызывается Phaser каждый кадр. delta — сколько мс прошло с прошлого кадра.
+  update(_time: number, delta: number): void {
+    // После Game Over ничего не двигаем: картинка «замирает».
+    if (this.isGameOver) return;
+
+    const seconds = delta / 1000;
+
+    this.updateDifficulty(delta);
+    this.updateSpawning(delta);
+
+    this.moveCars(this.horizontalCars, this.isHorizontalGreen, this.getHorizontalStopLineX(), seconds);
+    this.moveCars(this.verticalCars, !this.isHorizontalGreen, this.getVerticalStopLineY(), seconds);
+
+    this.removeFinishedCars(this.horizontalCars, this.scale.width);
+    this.removeFinishedCars(this.verticalCars, this.scale.height);
+
+    this.checkCrash();
+  }
+
+  // ===== Рисование перекрёстка =====
+
+  // Рисует две дороги крестом через центр экрана.
+  private drawRoads(): void {
     const { width, height } = this.scale;
+    const centerX = width / 2;
+    const centerY = height / 2;
 
-    this.add
-      .text(width / 2, 28, 'GAME DEV STARTER', {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: '28px',
-        color: '#ffffff',
-      })
-      .setOrigin(0.5, 0);
+    // Горизонтальная дорога: во всю ширину экрана.
+    this.add.rectangle(centerX, centerY, width, ROAD_WIDTH, ROAD_COLOR);
+    // Вертикальная дорога: во всю высоту экрана.
+    this.add.rectangle(centerX, centerY, ROAD_WIDTH, height, ROAD_COLOR);
+  }
 
-    this.add
-      .text(width / 2, 68, 'Стрелки / WASD — движение. Остальное придумай сам.', {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: '18px',
-        color: '#cbd5e1',
-      })
-      .setOrigin(0.5, 0);
+  // Рисует стоп-линии перед перекрёстком на каждой дороге.
+  private drawStopLines(): void {
+    const centerX = this.scale.width / 2;
+    const centerY = this.scale.height / 2;
 
-    this.player = this.add.rectangle(width / 2, height / 2, 42, 42, 0x38bdf8);
-    this.target = this.add.circle(width * 0.72, height * 0.52, 18, 0xfacc15);
+    // Горизонтальные машины едут слева, поэтому их стоп-линия
+    // стоит левее перекрёстка и пересекает дорогу поперёк.
+    this.add.rectangle(
+      this.getHorizontalStopLineX(),
+      centerY,
+      STOP_LINE_THICKNESS,
+      ROAD_WIDTH,
+      STOP_LINE_COLOR,
+    );
 
-    this.scoreText = this.add.text(24, height - 48, 'Score: 0', {
-      fontFamily: 'system-ui, sans-serif',
+    // Вертикальные машины едут сверху, поэтому их стоп-линия
+    // стоит выше перекрёстка.
+    this.add.rectangle(
+      centerX,
+      this.getVerticalStopLineY(),
+      ROAD_WIDTH,
+      STOP_LINE_THICKNESS,
+      STOP_LINE_COLOR,
+    );
+  }
+
+  // Создаёт два кружка-сигнала: каждый сбоку от своей дороги, чуть
+  // раньше стоп-линии, чтобы было сразу видно, к какой дороге он относится.
+  private createLights(): void {
+    const centerX = this.scale.width / 2;
+    const centerY = this.scale.height / 2;
+
+    // Сигнал горизонтальной дороги — под дорогой, левее стоп-линии.
+    this.horizontalLight = this.add.circle(
+      this.getHorizontalStopLineX() - LIGHT_BEFORE_STOP_LINE,
+      centerY + ROAD_WIDTH / 2 + LIGHT_OFFSET,
+      LIGHT_RADIUS,
+    );
+
+    // Сигнал вертикальной дороги — справа от дороги, выше стоп-линии.
+    this.verticalLight = this.add.circle(
+      centerX + ROAD_WIDTH / 2 + LIGHT_OFFSET,
+      this.getVerticalStopLineY() - LIGHT_BEFORE_STOP_LINE,
+      LIGHT_RADIUS,
+    );
+  }
+
+  // Создаёт текст счёта, ступень потока и подсказку в левом верхнем углу.
+  private createHud(): void {
+    this.scoreText = this.add.text(24, 20, `Счёт: ${this.score}`, {
+      fontFamily: FONT_FAMILY,
       fontSize: '22px',
       color: '#ffffff',
     });
 
+    this.flowText = this.add.text(24, 52, `Поток: ${this.flowLevel}`, {
+      fontFamily: FONT_FAMILY,
+      fontSize: '18px',
+      color: '#ffffff',
+    });
+
+    this.add.text(24, 82, 'Клик / Пробел — переключить светофор', {
+      fontFamily: FONT_FAMILY,
+      fontSize: '16px',
+      color: '#cbd5e1',
+    });
+  }
+
+  // ===== Управление и светофор =====
+
+  // Подключает управление: клик мышью и пробел делают одно и то же.
+  // (При перезапуске сцены Phaser сам снимает старые обработчики.)
+  private setupInput(): void {
     if (!this.input.keyboard) {
       throw new Error('Keyboard input is unavailable.');
     }
 
-    this.cursors = this.input.keyboard.createCursorKeys();
-    this.wasd = this.input.keyboard.addKeys({
-      up: Phaser.Input.Keyboard.KeyCodes.W,
-      down: Phaser.Input.Keyboard.KeyCodes.S,
-      left: Phaser.Input.Keyboard.KeyCodes.A,
-      right: Phaser.Input.Keyboard.KeyCodes.D,
-    }) as Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
+    this.input.on('pointerdown', () => this.handleAction());
+    this.input.keyboard.on('keydown-SPACE', () => this.handleAction());
   }
 
-  update(_time: number, delta: number): void {
-    const seconds = delta / 1000;
-    let dx = 0;
-    let dy = 0;
+  // Клик или пробел: во время игры переключает светофор,
+  // после Game Over начинает новую игру.
+  private handleAction(): void {
+    if (this.isGameOver) {
+      this.scene.restart();
+    } else {
+      this.toggleLight();
+    }
+  }
 
-    if (this.cursors.left.isDown || this.wasd.left.isDown) dx -= 1;
-    if (this.cursors.right.isDown || this.wasd.right.isDown) dx += 1;
-    if (this.cursors.up.isDown || this.wasd.up.isDown) dy -= 1;
-    if (this.cursors.down.isDown || this.wasd.down.isDown) dy += 1;
+  // Переключает светофор на другую дорогу.
+  private toggleLight(): void {
+    this.isHorizontalGreen = !this.isHorizontalGreen;
+    this.updateLights();
+  }
 
-    if (dx !== 0 || dy !== 0) {
-      const length = Math.hypot(dx, dy);
-      this.player.x += (dx / length) * PLAYER_SPEED * seconds;
-      this.player.y += (dy / length) * PLAYER_SPEED * seconds;
+  // Перекрашивает кружки-сигналы по текущему состоянию светофора.
+  private updateLights(): void {
+    this.horizontalLight.setFillStyle(this.isHorizontalGreen ? GREEN_COLOR : RED_COLOR);
+    this.verticalLight.setFillStyle(this.isHorizontalGreen ? RED_COLOR : GREEN_COLOR);
+  }
+
+  // ===== Сложность и появление машин =====
+
+  // Каждые DIFFICULTY_STEP_TIME мс машины начинают появляться чаще,
+  // пока интервал не дойдёт до MIN_SPAWN_INTERVAL.
+  private updateDifficulty(delta: number): void {
+    this.timeSinceDifficultyUp += delta;
+    if (this.timeSinceDifficultyUp < DIFFICULTY_STEP_TIME) return;
+
+    this.timeSinceDifficultyUp -= DIFFICULTY_STEP_TIME;
+
+    if (this.spawnInterval > MIN_SPAWN_INTERVAL) {
+      this.spawnInterval = Math.max(MIN_SPAWN_INTERVAL, this.spawnInterval - SPAWN_INTERVAL_STEP);
+      this.flowLevel += 1;
+      this.flowText.setText(`Поток: ${this.flowLevel}`);
+    }
+  }
+
+  // Раз в spawnInterval мс выпускает машину на случайную дорогу.
+  private updateSpawning(delta: number): void {
+    this.timeSinceSpawn += delta;
+    if (this.timeSinceSpawn < this.spawnInterval) return;
+
+    this.timeSinceSpawn -= this.spawnInterval;
+
+    const road: Road = Phaser.Math.Between(0, 1) === 0 ? 'horizontal' : 'vertical';
+    this.spawnCar(road);
+  }
+
+  // Создаёт новую машину за краем экрана в начале дороги.
+  private spawnCar(road: Road): void {
+    const cars = this.getCars(road);
+    const lastCar = cars[cars.length - 1];
+
+    // Новая машина появляется так, что её перед касается края экрана (0).
+    // Если последняя машина очереди ещё не отъехала от края на зазор,
+    // места нет — очередь дошла до края экрана.
+    if (lastCar && this.getBack(lastCar) < CAR_GAP) {
+      this.endGame('Пробка!');
+      return;
     }
 
-    this.keepPlayerOnScreen();
-    this.checkTarget();
+    const color = CAR_COLORS[Phaser.Math.Between(0, CAR_COLORS.length - 1)];
+    const centerX = this.scale.width / 2;
+    const centerY = this.scale.height / 2;
+    // Центр машины на половину длины за краем экрана.
+    const startPosition = -CAR_LENGTH / 2;
+
+    // Горизонтальная машина длинная по X, вертикальная — по Y.
+    const body =
+      road === 'horizontal'
+        ? this.add.rectangle(startPosition, centerY, CAR_LENGTH, CAR_WIDTH, color)
+        : this.add.rectangle(centerX, startPosition, CAR_WIDTH, CAR_LENGTH, color);
+
+    cars.push({ body, road });
   }
 
-  private keepPlayerOnScreen(): void {
-    const half = this.player.width / 2;
-    this.player.x = Phaser.Math.Clamp(this.player.x, half, this.scale.width - half);
-    this.player.y = Phaser.Math.Clamp(this.player.y, 110 + half, this.scale.height - half);
+  // ===== Движение машин =====
+
+  // Двигает все машины одной дороги.
+  // isGreen — горит ли зелёный для этой дороги,
+  // stopLine — координата стоп-линии вдоль этой дороги.
+  private moveCars(cars: Car[], isGreen: boolean, stopLine: number, seconds: number): void {
+    for (let i = 0; i < cars.length; i++) {
+      const car = cars[i];
+      const position = this.getPosition(car);
+
+      // Сколько машина хочет проехать за этот кадр.
+      let newPosition = position + CAR_SPEED * seconds;
+
+      // Красный свет: машина, которая ещё не пересекла стоп-линию,
+      // не может заехать за неё. Уже пересёкшая — едет дальше.
+      const hasCrossedStopLine = this.getFront(car) > stopLine;
+      if (!isGreen && !hasCrossedStopLine) {
+        newPosition = Math.min(newPosition, stopLine - CAR_LENGTH / 2);
+      }
+
+      // Машина впереди: держим зазор CAR_GAP до её задней части.
+      if (i > 0) {
+        const carAhead = cars[i - 1];
+        newPosition = Math.min(newPosition, this.getPosition(carAhead) - CAR_LENGTH - CAR_GAP);
+      }
+
+      // Машины никогда не едут назад.
+      this.setPosition(car, Math.max(position, newPosition));
+    }
   }
 
-  private checkTarget(): void {
-    const distance = Phaser.Math.Distance.Between(
-      this.player.x,
-      this.player.y,
-      this.target.x,
-      this.target.y,
-    );
+  // Убирает машины, полностью уехавшие за край экрана, и даёт за них очки.
+  // roadEnd — координата конца дороги (ширина или высота экрана).
+  private removeFinishedCars(cars: Car[], roadEnd: number): void {
+    // Первой уезжает машина [0], поэтому проверяем только начало массива.
+    while (cars.length > 0 && this.getBack(cars[0]) > roadEnd) {
+      const car = cars.shift();
+      car?.body.destroy();
+      this.score += 1;
+      this.scoreText.setText(`Счёт: ${this.score}`);
+    }
+  }
 
-    if (distance > 42) return;
+  // ===== Game Over =====
 
-    this.score += 1;
-    this.scoreText.setText(`Score: ${this.score}`);
+  // Авария: если какая-то горизонтальная машина пересеклась с вертикальной.
+  private checkCrash(): void {
+    for (const horizontalCar of this.horizontalCars) {
+      for (const verticalCar of this.verticalCars) {
+        const isTouching = Phaser.Geom.Intersects.RectangleToRectangle(
+          horizontalCar.body.getBounds(),
+          verticalCar.body.getBounds(),
+        );
 
-    this.target.setPosition(
-      Phaser.Math.Between(60, this.scale.width - 60),
-      Phaser.Math.Between(140, this.scale.height - 80),
-    );
+        if (isTouching) {
+          this.endGame('Авария!');
+          return;
+        }
+      }
+    }
+  }
+
+  // Останавливает игру и показывает причину, счёт и подсказку для рестарта.
+  private endGame(reason: string): void {
+    this.isGameOver = true;
+
+    const { width, height } = this.scale;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    // Полупрозрачное затемнение поверх всего поля.
+    this.add.rectangle(centerX, centerY, width, height, GAME_OVER_SHADE_COLOR, GAME_OVER_SHADE_ALPHA);
+    // Плашка под надписями, чтобы их не перебивали машины и дороги.
+    this.add.rectangle(centerX, centerY, GAME_OVER_PANEL_WIDTH, GAME_OVER_PANEL_HEIGHT, GAME_OVER_PANEL_COLOR);
+
+    this.add
+      .text(centerX, centerY - 60, reason, {
+        fontFamily: FONT_FAMILY,
+        fontSize: '48px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+
+    this.add
+      .text(centerX, centerY, `Счёт: ${this.score}`, {
+        fontFamily: FONT_FAMILY,
+        fontSize: '28px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+
+    this.add
+      .text(centerX, centerY + 50, 'Клик или пробел — новая игра', {
+        fontFamily: FONT_FAMILY,
+        fontSize: '18px',
+        color: '#cbd5e1',
+      })
+      .setOrigin(0.5);
+  }
+
+  // ===== Вспомогательные функции =====
+
+  // Массив машин нужной дороги.
+  private getCars(road: Road): Car[] {
+    return road === 'horizontal' ? this.horizontalCars : this.verticalCars;
+  }
+
+  // Положение центра машины вдоль её дороги: X для горизонтали, Y для вертикали.
+  private getPosition(car: Car): number {
+    return car.road === 'horizontal' ? car.body.x : car.body.y;
+  }
+
+  // Ставит центр машины в нужное место вдоль её дороги.
+  private setPosition(car: Car, position: number): void {
+    if (car.road === 'horizontal') {
+      car.body.x = position;
+    } else {
+      car.body.y = position;
+    }
+  }
+
+  // Координата переднего края машины (по ходу движения).
+  private getFront(car: Car): number {
+    return this.getPosition(car) + CAR_LENGTH / 2;
+  }
+
+  // Координата заднего края машины.
+  private getBack(car: Car): number {
+    return this.getPosition(car) - CAR_LENGTH / 2;
+  }
+
+  // X стоп-линии горизонтальной дороги: левый край перекрёстка минус отступ.
+  private getHorizontalStopLineX(): number {
+    return this.scale.width / 2 - ROAD_WIDTH / 2 - STOP_LINE_GAP;
+  }
+
+  // Y стоп-линии вертикальной дороги: верхний край перекрёстка минус отступ.
+  private getVerticalStopLineY(): number {
+    return this.scale.height / 2 - ROAD_WIDTH / 2 - STOP_LINE_GAP;
   }
 }
