@@ -62,6 +62,22 @@ const FONT_FAMILY = 'system-ui, sans-serif';
 // Слой надписи «Пауза»: выше машин, чтобы они её не закрывали.
 const PAUSE_TEXT_DEPTH = 10;
 
+// ===== Фаза 2 «Час пик» =====
+
+// Через сколько мс игрового времени начинается фаза 2.
+const PHASE_2_START_TIME = 60000;
+// Скорость машин в фазе 2 (в фазе 1 — CAR_SPEED).
+const PHASE_2_CAR_SPEED = 190;
+// Доля машин, которые появляются на горизонтальной дороге.
+const PHASE_1_HORIZONTAL_CHANCE = 0.5;
+const PHASE_2_HORIZONTAL_CHANCE = 0.7;
+// Сколько мс виден баннер «ЧАС ПИК!».
+const PHASE_BANNER_TIME = 3000;
+// Цвет дорог в фазе 2: постоянный знак, что идёт час пик.
+const PHASE_2_ROAD_COLOR = 0x4b3a2e;
+// Слой баннера: выше машин, но ниже надписи «Пауза».
+const PHASE_BANNER_DEPTH = 5;
+
 // Дорога, по которой едет машина.
 type Road = 'horizontal' | 'vertical';
 
@@ -106,8 +122,25 @@ export class GameScene extends Phaser.Scene {
   // Номер ступени сложности, показывается в HUD.
   private flowLevel = 1;
 
+  // Текущая фаза игры: 1 — обычная, 2 — «Час пик».
+  private phase = 1;
+  // Сколько мс игрового времени прошло (на паузе не растёт).
+  private gameTime = 0;
+  // Текущая скорость машин (меняется в фазе 2).
+  private carSpeed = CAR_SPEED;
+  // Текущая доля машин на горизонтальной дороге (меняется в фазе 2).
+  private horizontalChance = PHASE_1_HORIZONTAL_CHANCE;
+  // Сколько мс ещё виден баннер «ЧАС ПИК!».
+  private bannerTimeLeft = 0;
+  // Прямоугольники обеих дорог, чтобы перекрасить их в фазе 2.
+  private roads: Phaser.GameObjects.Rectangle[] = [];
+
   private scoreText!: Phaser.GameObjects.Text;
   private flowText!: Phaser.GameObjects.Text;
+  // Строка HUD с номером фазы.
+  private phaseText!: Phaser.GameObjects.Text;
+  // Баннер «ЧАС ПИК!», виден несколько секунд после перехода.
+  private phaseBanner!: Phaser.GameObjects.Text;
   // Надпись «Пауза», видна только во время паузы.
   private pauseText!: Phaser.GameObjects.Text;
   // Кружок-сигнал для машин горизонтальной дороги.
@@ -132,11 +165,19 @@ export class GameScene extends Phaser.Scene {
     this.timeSinceSpawn = 0;
     this.timeSinceDifficultyUp = 0;
     this.flowLevel = 1;
+    // Новая игра всегда начинается с фазы 1.
+    this.phase = 1;
+    this.gameTime = 0;
+    this.carSpeed = CAR_SPEED;
+    this.horizontalChance = PHASE_1_HORIZONTAL_CHANCE;
+    this.bannerTimeLeft = 0;
+    this.roads = [];
 
     this.drawRoads();
     this.drawStopLines();
     this.createLights();
     this.createHud();
+    this.createPhaseBanner();
     this.createPauseText();
     this.setupInput();
 
@@ -152,6 +193,7 @@ export class GameScene extends Phaser.Scene {
 
     const seconds = delta / 1000;
 
+    this.updatePhase(delta);
     this.updateDifficulty(delta);
     this.updateSpawning(delta);
 
@@ -173,9 +215,12 @@ export class GameScene extends Phaser.Scene {
     const centerY = height / 2;
 
     // Горизонтальная дорога: во всю ширину экрана.
-    this.add.rectangle(centerX, centerY, width, ROAD_WIDTH, ROAD_COLOR);
+    const horizontalRoad = this.add.rectangle(centerX, centerY, width, ROAD_WIDTH, ROAD_COLOR);
     // Вертикальная дорога: во всю высоту экрана.
-    this.add.rectangle(centerX, centerY, ROAD_WIDTH, height, ROAD_COLOR);
+    const verticalRoad = this.add.rectangle(centerX, centerY, ROAD_WIDTH, height, ROAD_COLOR);
+
+    // Запоминаем дороги, чтобы в фазе 2 перекрасить их.
+    this.roads = [horizontalRoad, verticalRoad];
   }
 
   // Рисует стоп-линии перед перекрёстком на каждой дороге.
@@ -239,11 +284,36 @@ export class GameScene extends Phaser.Scene {
       color: '#ffffff',
     });
 
-    this.add.text(24, 82, 'Клик / Пробел — переключить светофор, P — пауза', {
+    this.phaseText = this.add.text(24, 82, `Фаза ${this.phase}`, {
+      fontFamily: FONT_FAMILY,
+      fontSize: '18px',
+      color: '#ffffff',
+    });
+
+    this.add.text(24, 112, 'Клик / Пробел — переключить светофор, P — пауза', {
       fontFamily: FONT_FAMILY,
       fontSize: '16px',
       color: '#cbd5e1',
     });
+  }
+
+  // Создаёт баннер «ЧАС ПИК!». Сначала он скрыт.
+  // Стоит в центре правой верхней четверти экрана: там нет дорог,
+  // поэтому баннер не закрывает машины в момент перехода.
+  private createPhaseBanner(): void {
+    this.phaseBanner = this.add
+      .text(this.scale.width * 0.75, this.scale.height * 0.25, 'ЧАС ПИК!\nмашины быстрее,\nна горизонтали их больше', {
+        fontFamily: FONT_FAMILY,
+        fontSize: '24px',
+        fontStyle: 'bold',
+        color: '#facc15',
+        align: 'center',
+        backgroundColor: '#0f172a',
+        padding: { x: 24, y: 16 },
+      })
+      .setOrigin(0.5)
+      .setDepth(PHASE_BANNER_DEPTH)
+      .setVisible(false);
   }
 
   // Создаёт надпись «Пауза» по центру экрана. Сначала она скрыта.
@@ -336,8 +406,47 @@ export class GameScene extends Phaser.Scene {
 
     this.timeSinceSpawn -= this.spawnInterval;
 
-    const road: Road = Phaser.Math.Between(0, 1) === 0 ? 'horizontal' : 'vertical';
+    // С вероятностью horizontalChance машина едет по горизонтали,
+    // иначе — по вертикали. В фазе 1 это 50/50, в фазе 2 — 70/30.
+    const road: Road = Math.random() < this.horizontalChance ? 'horizontal' : 'vertical';
     this.spawnCar(road);
+  }
+
+  // ===== Фазы =====
+
+  // Считает игровое время, включает фазу 2 и прячет баннер, когда его время вышло.
+  // Вызывается только из update(), поэтому на паузе время не идёт.
+  private updatePhase(delta: number): void {
+    this.gameTime += delta;
+
+    if (this.phase === 1 && this.gameTime >= PHASE_2_START_TIME) {
+      this.startPhase2();
+    }
+
+    if (this.bannerTimeLeft > 0) {
+      this.bannerTimeLeft -= delta;
+      if (this.bannerTimeLeft <= 0) {
+        this.phaseBanner.setVisible(false);
+      }
+    }
+  }
+
+  // Переход в фазу 2 «Час пик»: меняются два параметра и показывается сигнал.
+  private startPhase2(): void {
+    this.phase = 2;
+
+    // Параметр 1: машины едут быстрее.
+    this.carSpeed = PHASE_2_CAR_SPEED;
+    // Параметр 2: больше машин идёт по горизонтали.
+    this.horizontalChance = PHASE_2_HORIZONTAL_CHANCE;
+
+    // Сигнал игроку: строка в HUD, новый цвет дорог и баннер на несколько секунд.
+    this.phaseText.setText('Фаза 2 — час пик');
+    for (const road of this.roads) {
+      road.setFillStyle(PHASE_2_ROAD_COLOR);
+    }
+    this.phaseBanner.setVisible(true);
+    this.bannerTimeLeft = PHASE_BANNER_TIME;
   }
 
   // Создаёт новую машину за краем экрана в начале дороги.
@@ -379,7 +488,7 @@ export class GameScene extends Phaser.Scene {
       const position = this.getPosition(car);
 
       // Сколько машина хочет проехать за этот кадр.
-      let newPosition = position + CAR_SPEED * seconds;
+      let newPosition = position + this.carSpeed * seconds;
 
       // Красный свет: машина, которая ещё не пересекла стоп-линию,
       // не может заехать за неё. Уже пересёкшая — едет дальше.
